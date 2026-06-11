@@ -1,0 +1,50 @@
+# Cache, Logs and System Environment Files
+.env
+.env.*
+!.env.example
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Google Cloud Platform Secrets and Credentials
+*service_account*.json
+*credentials*.json
+secrets/
+.gcp/
+
+# SSH Keys and private keys
+*.pem
+*.key
+id_rsa
+id_ecdsa
+id_ed25519
+
+# Node / Svelte/ SvelteKit build and deps
+node_modules/
+.svelte-kit/
+dist/
+build/
+.pnpm-store/
+
+# Python Virtual Environments and caches
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.uv/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Docker volumes and local databases
+data/
+openwebui_data/
+*.db
+*.sqlite
+sqlite/
+pgdata/
