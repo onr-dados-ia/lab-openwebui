@@ -44,40 +44,14 @@ Disponibilizar uma interface de chat web amigável, intuitiva, rica em recursos 
 
 ## 3. Backlog do MVP (User Stories & Critérios de Aceite)
 
-### US01: Acesso Seguro e Autenticação de Usuários no ONR
+### US01: Acesso Seguro e Autenticação Corporativa via Google SSO (OIDC) no ONR
 **Como** colaborador do ONR  
-**Eu quero** autenticar-me de forma segura na interface do Open WebUI  
-**Para que** eu possa acessar meu ambiente de chat pessoal e manter meu histórico e configurações privados.
+**Eu quero** autenticar-me de forma simples e segura utilizando minha conta de login institucional do Google (Google Workspace)  
+**Para que** eu possa acessar meu painel de chat pessoal do Open WebUI sem criar novas senhas, garantindo que apenas usuários corporativos ativos tenham acesso ao sistema.
 
 *   **Padrão INVEST:**
-    *   **I**ndependent: Pode ser implementada em paralelo ou usando o sistema padrão do Open WebUI até a decisão de integração SSO.
-    *   **N**egotiable: A estratégia de SSO (OAuth2/Microsoft Entra ID vs Cadastro Local) é negociável dependendo da maturidade do IdP.
-    *   **V**aluable: Garante a confidencialidade e segurança das interações de IA do ONR.
-    *   **E**stimable: Complexidade moderada (3 Story Points).
-    *   **S**mall: Focada estritamente na autenticação e bloqueio de novos cadastros externos não autorizados.
-    *   **T**estable: Validável por login com credenciais válidas e tentativa de cadastro por usuários externos.
-
-*   **Critérios de Aceite (BDD - Gherkin):**
-    *   **Cenário 1: Cadastro restrito por domínio institucional**
-        *   **Dado que** o sistema está exposto publicamente na infraestrutura do ONR
-        *   **Quando** um usuário tenta se registrar utilizando um e-mail com domínio `@onr.org.br`
-        *   **Então** o sistema permite a criação de conta e o redireciona ao painel principal do Open WebUI.
-    *   **Cenário 2: Bloqueio de cadastros externos**
-        *   **Dado que** o recurso de controle de domínio está ativo
-        *   **Quando** um usuário tenta se registrar utilizando um domínio público/pessoal (ex: `@gmail.com` ou `@outlook.com`)
-        *   **Então** o sistema exibe uma mensagem de erro ("Domínio de e-mail não autorizado") e bloqueia a criação de conta.
-    *   **Cenário 3: Primeiro usuário como Admin corporativo**
-        *   **Dado que** o banco de dados PostgreSQL está vazio e o serviço acabou de ser provisionado
-        *   **Quando** o primeiro usuário com domínio `@onr.org.br` se cadastra no Open WebUI
-        *   **Então** ele é promovido automaticamente a Administrador do sistema para poder gerenciar as permissões e modelos de IA.
-
-*   **Definition of Ready (DoR):**
-    *   Domínios autorizados mapeados (`onr.org.br` e subdomínios).
-    *   Decisão sobre desativação de cadastro público (`ENABLE_SIGNUP=False` ou restrição por whitelist `WHITELIST_SIGNUP_DOMAINS`).
-*   **Definition of Done (DoD):**
-    *   Todas as credenciais sensíveis (secrets de criptografia e tokens) armazenadas fora do código (variáveis de ambiente gerenciadas via GCP Secret Manager ou ambiente seguro).
-    *   Autenticação testada contra tentativas de injeção ou bypass de autenticação.
-    *   Aprovação do compliance de segurança do ONR para conformidade com a LGPD (proteção de contas de usuário).
+    *   **I**ndependent: Pode ser implementada ativando os parâmetros OAuth2 nativos do Open WebUI.
+    *   
 
 ---
 

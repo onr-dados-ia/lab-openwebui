@@ -236,17 +236,22 @@ Como o Open WebUI divide a memória RAM e a CPU com o LiteLLM na mesma VM, as se
 
 ## 7. Diretrizes Técnicas de Segurança e Governança
 
-*   **Controle de Cadastro (US01):**
-    As seguintes variáveis de ambiente devem ser forçadas para garantir segurança total contra cadastros não autorizados:
+*   **Controle de Cadastro & Google SSO (US01):**
+    A autenticação dos colaboradores do ONR deve ocorrer obrigatoriamente através do login único (SSO) do **Google Workspace**. As seguintes variáveis de ambiente lógicas de controle de cadastro e integração OIDC (OpenID Connect) devem ser injetadas de forma forçada:
     ```bash
-    # Desabilita o cadastro público e aberto de novos usuários na tela inicial do sistema
-    ENABLE_SIGNUP=True
+    # Ativação do Google OAuth no Open WebUI
+    ENABLE_OAUTH_SIGNUP=True
+    GOOGLE_CLIENT_ID=seu-google-client-id-onr.apps.googleusercontent.com
+    GOOGLE_CLIENT_SECRET=sua-chave-secreta-oauth-google
     
-    # Restringe a criação de contas APENAS para colaboradores com e-mails corporativos ONR
+    # Restrição de cadastro e login exclusivamente para o domínio Google Workspace do ONR
+    GOOGLE_CLIENT_REDIRECT_URI=https://ia.onr.org.br/oauth/google/callback
+    GOOGLE_ALLOWED_DOMAINS=onr.org.br
+    
+    # Controle geral de registros tradicionais e papéis de usuário
+    ENABLE_SIGNUP=False             # Bloqueia completamente cadastros tradicionais por e-mail/senha local
     WHITELIST_SIGNUP_DOMAINS=onr.org.br
-    
-    # Define o papel inicial como "user" para evitar escalação de privilégios automática
-    DEFAULT_USER_ROLE=user
+    DEFAULT_USER_ROLE=user          # Papel padrão não-admin na inicialização
     ```
 *   **Armazenamento de Chaves e Segredos:** Todas as strings de conexão e chaves de API devem ser injetadas dinamicamente na inicialização do container utilizando variáveis de ambiente fornecidas pelo GCP Secret Manager ou por ferramentas de gerenciamento de configurações seguras, em conformidade com o DoD (Definition of Done) estabelecido pelo PO.
 
