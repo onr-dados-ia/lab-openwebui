@@ -99,30 +99,34 @@ graph TB
 
 ## 3. Topologia de Conexões e Fluxo de Dados Ponta a Ponta
 
-A arquitetura lógica é projetada para otimizar a confiabilidade e garantir que nenhuma credencial sensível ou dados corporativos vazem para domínios públicos não controlados. Toda a comunicação ocorre dentro da VPC `vpc-shared-produtos` (Projeto: `onr-shared`) usando a subrede `subrede-ai-ml-develop`.
+A arquitetura lógica é projetada para otimizar a confiabilidade e garantir que nenhuma credencial sensível ou dados corporativos vazem para domínios públicos não controlados. Toda a comunicação ocorre dentro da VPC `vpc-shared-produtos` (Projeto: `onr-shared`) usando a subrede `subrede-ai-ml-develop` e integrada ao **Load Balancer Interno (ILB)** sob o domínio unificado do ONR.
 
-### 3.1. Fluxo de Chat de IA (Síncrono/Streaming)
+### 3.1. Fluxo de Chat de IA (Síncrono/Streaming com Roteamento por Subcaminho)
 
 ```
-[Colaborador] 
+[Colaborador na VPN] 
       │ 
-      │ (1) Envia prompt de Chat (HTTPS)
+      │ (1) Acessa o portal de IA unificado (HTTPS - dados-ia.onr.org.br/chat)
       ▼
-[Nginx / Proxy Reverso] 
+[GCP Internal Load Balancer] 
       │ 
-      │ (2) Encaminha requisição (HTTP - Porta 8080)
+      │ (2) Decifra TLS (Cadeado Verde) e roteia via Path-Rule /chat/* para a VM (HTTP - Porta 80)
       ▼
-[Open WebUI App] 
+[Proxy Reverso Nginx na VM] 
       │ 
-      │ (3) Roteia chamada OpenAI-compatible via VPC (HTTP - 10.75.0.3:4000/v1)
+      │ (3) Intercepta, valida login via Auth Bridge e repassa removendo prefixo /chat/
+      ▼
+[Open WebUI App (Porta 8080)] 
+      │ 
+      │ (4) Roteia chamada OpenAI-compatible via VPC (HTTP - 10.75.0.3:4000/v1) portando a Virtual Key do usuário
       ▼
 [LiteLLM Gateway (10.75.0.3)] 
       │ 
-      │ (4) Autentica, aplica cota/auditoria e anexa credencial corporativa
+      │ (5) Autentica, audita consumo da Virtual Key e anexa credencial corporativa
       ▼
 [Provedor Externo (ex: Azure OpenAI)]
       │ 
-      │ (5) Responde em tempo real via Server-Sent Events (SSE / Streaming)
+      │ (6) Responde em tempo real via Server-Sent Events (SSE / Streaming)
       ▼ (Retorno pelo canal reverso de conexões síncronas abertas)
 [Colaborador - Interface Web renderizando via Chunked Streaming]
 ```
@@ -177,28 +181,36 @@ O Open WebUI foi projetado para se integrar nativamente com APIs compatíveis co
 
 O Open WebUI e o LiteLLM estão integrados dentro da rede privada `vpc-shared-produtos` do ONR (subrede `subrede-ai-ml-develop`). O Open WebUI consome o LiteLLM através de seu IP privado `10.75.0.3` na porta `4000`. Isso garante que todo o tráfego permaneça dentro do barramento corporativo do ONR sem transitar pela internet.
 
-### 5.2. Configurações de Integração do Open WebUI (User-Based API Keys)
+### 5.2. Autenticação por Usuário/Senha do LiteLLM & Uso de Virtual Keys Individuais
 
-Para que cada colaborador seja individualmente bilhetado, auditado e tenha suas permissões lógicas de modelos gerenciadas de forma única no LiteLLM, o Open WebUI **não utilizará uma chave de API global/genérica do LiteLLM** em suas variáveis de ambiente no container.
+Fica estabelecido o fluxo de autenticação e consumo de modelos baseado diretamente na base de usuários cadastrada no **LiteLLM**. O ecossistema de IA do ONR não utilizará autenticação externa (como Google SSO) nem chaves genéricas de sistema no Open WebUI.
 
-*   **Configuração de Endpoint do Gateway (Sem chave estática):**
-    O container do Open WebUI será configurado de modo a direcionar todas as chamadas apenas para o endereço base, sem fornecer uma credencial comum:
-    ```bash
-    # Aponta a integração padrão para a rota interna da VPC do LiteLLM
-    OPENAI_API_BASE_URL=http://10.75.0.3:4000/v1
-    OPENAI_API_BASE_URLS=http://10.75.0.3:4000/v1
-    
-    # Deixar as chaves estáticas vazias ou desativadas obriga a interface a requisitar a chave individual
-    OPENAI_API_KEY=""
-    OPENAI_API_KEYS=""
-    ```
+#### A. O Fluxo de Login Unificado (Autenticação via Portal LiteLLM)
+1.  **Acesso Direto por IP Privado:** O colaborador acessa o Open WebUI digitando diretamente o endereço de IP privado da VM do GCP (sem necessidade de domínios públicos ou DNS públicos).
+2.  **Ponte de Autenticação (Forward Auth Proxy):**
+    *   Um pequeno container utilitário de autenticação (`litellm-auth-bridge`) é executado na VM de orquestração do Open WebUI.
+    *   Quando o colaborador insere seu **Usuário e Senha** na tela de login, o Proxy intercepta e faz uma requisição HTTP POST para o endpoint administrativo do LiteLLM (geralmente `/user/auth` ou consulta direta à tabela de credenciais `litellm_db.user_table` no banco relacional `litellm-db` de IP `10.59.156.17` que o Open WebUI possui conectividade).
+    *   Se as credenciais de usuário/senha forem válidas perante o LiteLLM, o `litellm-auth-bridge` autentica a sessão e repassa as informações para o Open WebUI via Trusted Headers (`X-User-Email` e `X-User-Name`), efetuando o login transparente e criando o perfil dele na interface de chat.
 
-*   **Fluxo de Autenticação e Configuração por Usuário (User Profile Keys):**
-    1.  O colaborador realiza a autenticação na plataforma via **Google Workspace SSO**.
-    2.  No primeiro acesso, ou através do painel de **Configurações Pessoais (Profile Settings)** na interface web do Open WebUI, o usuário é instruído a cadastrar a sua **Chave de API do LiteLLM** individual (previamente emitida para ele pela coordenação de IA).
-    3.  A chave do usuário é salva de forma criptografada pelo Open WebUI no banco de dados exclusivo do Cloud SQL (**`db_openwebui`**).
-    4.  Ao iniciar qualquer interação de chat, o backend do Open WebUI recupera do banco a chave privada do usuário específico e anexa o respectivo token de portador (`Authorization: Bearer <CHAVE_INDIVIDUAL_DO_USUARIO>`) nas requisições direcionadas para `http://10.75.0.3:4000/v1`.
-    5.  O gateway LiteLLM recebe a requisição, lê o token, identifica o colaborador associado, valida as permissões de acesso daquela chave aos modelos de IA solicitados, e **registra o consumo, custos e logs diretamente vinculados ao perfil desse usuário**.
+#### B. Fluxo de Execução com Virtual Keys Individuais (Faturamento Rastreável)
+1.  **Cadastro da Virtual Key:** 
+    Uma vez logado na interface web do Open WebUI, o usuário vai até o seu painel pessoal de configurações e informa qual **Virtual Key** (Chave de API virtual gerada por ele no portal do LiteLLM) ele deseja utilizar para consumir os modelos de IA.
+2.  **Armazenamento Criptografado:**
+    O Open WebUI salva essa Virtual Key de forma encriptada no banco de dados exclusivo **`db_openwebui`** associada ao perfil do usuário.
+3.  **Encaminhamento das Requisições:**
+    A cada mensagem enviada no chat pelo colaborador:
+    *   O Open WebUI recupera a Virtual Key configurada pelo usuário logado.
+    *   Monta a requisição e a direciona para `http://10.75.0.3:4000/v1` injetando a chave do usuário no cabeçalho `Authorization: Bearer <VIRTUAL_KEY_INDIVIDUAL>`.
+4.  **Auditoria e Bilhetagem Nativa no LiteLLM:**
+    O gateway LiteLLM (`10.75.0.3`) intercepta o token, valida os limites e permissões daquela **Virtual Key** específica e gera a gravação dos logs de consumo e custos diretamente atrelados a ela, garantindo rate-limits individuais e rastreabilidade total de despesas por chave.
+
+```
+[Colaborador] 
+      │
+      ├─► (1) Fornece Usuário/Senha do LiteLLM ──► [Auth Bridge] ──► [Valida no LiteLLM DB/API] ──► [Loga no Open WebUI]
+      │
+      └─► (2) Envia Chat (Usa Virtual Key) ──► [Open WebUI] ──► (HTTP c/ Bearer Virtual_Key) ──► [LiteLLM 10.75.0.3] (Bilhetagem Nativa)
+```
 
 ### 5.3. Sincronização e Governança de Modelos
 

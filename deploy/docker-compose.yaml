@@ -81,6 +81,9 @@ services:
       - WEBUI_AUTH_TRUSTED_NAME_HEADER=X-User-Name
       - DEFAULT_USER_ROLE=user          # Papel inicial padrão para novos perfis criados
       
+      # Força o Open WebUI a operar sob o subcaminho /chat gerenciado no Load Balancer
+      - WEBUI_URL=http://dados-ia.onr.org.br/chat
+      
       # Otimização de Concorrência e Workers (Mitigação de OOM na VM física)
       - WEB_CONCURRENCY=3
     depends_on:
