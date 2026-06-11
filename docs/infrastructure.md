@@ -285,30 +285,29 @@ resource "google_project_iam_member" "monitoring_metric_writer" {
 
 ## 4. Orquestração Multi-Serviço (`docker-compose.yaml`)
 
-Abaixo está o arquivo `docker-compose.yaml` completo e auto-portável, pronto para ser executado no servidor `gce-openwebui-vm` do ONR. Como o **LiteLLM** já se encontra deployado e operacional em `10.75.0.3:4000`, a stack local é simplificada, necessitando rodar apenas o container do **Open WebUI**, o **Proxy Reverso HTTPS (Nginx)** e o **Cloud SQL Auth Proxy** (para encapsular de forma criptografada as queries via IP privado do PostgreSQL a partir de credenciais temporárias do IAM).
+Abaixo está o arquivo `docker-compose.yaml` de produção completo e auto-portável. Como o **LiteLLM** já se encontra operando de forma externa em `10.75.0.3:4000`, a VM executa apenas o **Open WebUI**, o **Proxy Reverso Nginx** (conectado ao Load Balancer Interno do ONR) e o **Auth Bridge** de validação de credenciais de login.
+
+A conexão de banco de dados é feita diretamente via IP privado do Cloud SQL `openwebui-db` (sem necessidade do container do proxy local na VM), e as variáveis confidenciais de persistência e host são extraídas sob demanda de forma segura da memória via **GCP Secret Manager** na inicialização do serviço.
 
 ```yaml
 version: '3.8'
 
 services:
   # ---------------------------------------------------------------------------
-  # 1. Cloud SQL Auth Proxy: Garante a conexão criptografada com o PostgreSQL
+  # 1. LiteLLM Auth Bridge: Ponte de autenticação usando credenciais do LiteLLM
   # ---------------------------------------------------------------------------
-  cloud-sql-proxy:
-    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.2
-    container_name: cloud-sql-proxy
-    # Conecta utilizando a Service Account atrelada por metadados à própria VM do GCP
-    command:
-      - "--private-ip"
-      - "--port=5432"
-      - "projeto-ai-ml-develop:southamerica-east1:openwebui-db"
+  litellm-auth-bridge:
+    image: southamerica-east1-docker.pkg.dev/projeto-ai-ml-develop/onr-ia-registry/litellm-auth-bridge:latest
+    container_name: litellm-auth-bridge
     restart: always
     expose:
-      - "5432"
+      - "5000"
+    environment:
+      - LITELLM_API_BASE=http://10.75.0.3:4000
     networks:
-      - ia_network
+      - onr_ia_network
     healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "5432"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -325,8 +324,8 @@ services:
     volumes:
       - openwebui_data:/app/backend/data
     environment:
-      # Conexão segura através do proxy de banco local (apontando para openwebui-db na porta 5432)
-      - DATABASE_URL=postgresql://user_openwebui:${DB_PASSWORD}@cloud-sql-proxy:5432/db_openwebui?sslmode=disable
+      # Conexão JDBC direta via IP Privado do Cloud SQL (Extraído de forma segura da memória)
+      - DATABASE_URL=postgresql://user_openwebui:${DB_PASSWORD}@${DB_HOST}:5432/db_openwebui?sslmode=require
       
       # Pool de Conexões Otimizado
       - DATABASE_POOL_SIZE=20
@@ -340,13 +339,62 @@ services:
       - OPENAI_API_BASE_URLS=http://10.75.0.3:4000/v1
       - OPENAI_API_KEYS=""
       
-      # Segurança de Cadastro - Domínio Estrito ONR & Google SSO (US01)
-      - ENABLE_SIGNUP=false             # Desativa cadastros tradicionais por e-mail/senha locais
-      - ENABLE_OAUTH_SIGNUP=true        # Ativa o fluxo de cadastro e login por provedores OAuth
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - GOOGLE_CLIENT_REDIRECT_URI=https://ia.onr.org.br/oauth/google/callback
-      - GOOGLE_ALLOWED_DOMAINS=onr.org.br
+      # Autenticação Integrada via Base do LiteLLM (Trusted Header Auth via Bridge)
+      - ENABLE_SIGNUP=false             # Desativa cadastros comuns locais
+      - ENABLE_OAUTH_SIGNUP=false       # Desativa login externo via Google SSO/OIDC
+      - WEBUI_AUTH=true                 # Ativa autenticação delegada (Trusted Header Auth)
+      - WEBUI_AUTH_TRUSTED_EMAIL_HEADER=X-User-Email
+      - WEBUI_AUTH_TRUSTED_NAME_HEADER=X-User-Name
+      - DEFAULT_USER_ROLE=user          # Papel inicial padrão para novos perfis criados
+      
+      # Força o Open WebUI a operar sob o subcaminho /chat gerenciado no Load Balancer
+      - WEBUI_URL=http://dados-ia.onr.org.br/chat
+      
+      # Otimização de Concorrência e Workers (Mitigação de OOM na VM física)
+      - WEB_CONCURRENCY=3
+    depends_on:
+      litellm-auth-bridge:
+        condition: service_healthy
+    networks:
+      - onr_ia_network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 3. Proxy Reverso Nginx: Terminação SSL/HTTP e Proteção de Borda
+  # ---------------------------------------------------------------------------
+  nginx-proxy:
+    image: southamerica-east1-docker.pkg.dev/projeto-ai-ml-develop/onr-ia-registry/nginx-proxy:latest
+    container_name: nginx-proxy
+    restart: always
+    ports:
+      - "80:80" # Mapeia porta HTTP 80 para acesso flexível sem DNS e SSL provisórios
+    depends_on:
+      - open-webui
+    networks:
+      - onr_ia_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+networks:
+  onr_ia_network:
+    driver: bridge
+
+volumes:
+  openwebui_data:
+    driver: local
+```
       - WHITELIST_SIGNUP_DOMAINS=onr.org.br
       - DEFAULT_USER_ROLE=user
       

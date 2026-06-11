@@ -31,10 +31,8 @@ services:
       - "8080"
     volumes:
       - openwebui_data:/app/backend/data
-    env_file:
-      - .env.gcp
     environment:
-      # Conexão JDBC direta via IP Privado do Cloud SQL (Igualzinho ao LiteLLM)
+      # Conexão JDBC direta via IP Privado do Cloud SQL (Lido diretamente da memória pelo Secret Manager)
       - DATABASE_URL=postgresql://user_openwebui:${DB_PASSWORD}@${DB_HOST}:5432/db_openwebui?sslmode=require
       
       # Pool de Conexões Otimizado do SQLAlchemy
