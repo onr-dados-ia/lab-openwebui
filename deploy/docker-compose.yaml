@@ -2,28 +2,7 @@ version: '3.8'
 
 services:
   # ---------------------------------------------------------------------------
-  # 1. Cloud SQL Auth Proxy: Garante a conexão privada e criptografada com o PostgreSQL
-  # ---------------------------------------------------------------------------
-  cloud-sql-proxy:
-    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.2
-    container_name: cloud-sql-proxy
-    command:
-      - "--private-ip"
-      - "--port=5432"
-      - "projeto-ai-ml-develop:southamerica-east1:openwebui-db"
-    restart: always
-    expose:
-      - "5432"
-    networks:
-      - onr_ia_network
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "5432"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # ---------------------------------------------------------------------------
-  # 2. LiteLLM Auth Bridge: Ponte de autenticação usando credenciais do LiteLLM
+  # 1. LiteLLM Auth Bridge: Ponte de autenticação usando credenciais do LiteLLM
   # ---------------------------------------------------------------------------
   litellm-auth-bridge:
     image: southamerica-east1-docker.pkg.dev/projeto-ai-ml-develop/onr-ia-registry/litellm-auth-bridge:latest
@@ -52,9 +31,11 @@ services:
       - "8080"
     volumes:
       - openwebui_data:/app/backend/data
+    env_file:
+      - .env.gcp
     environment:
-      # Conexão JDBC criptografada mapeada localmente via Cloud SQL Proxy
-      - DATABASE_URL=postgresql://user_openwebui:${DB_PASSWORD}@cloud-sql-proxy:5432/db_openwebui?sslmode=disable
+      # Conexão JDBC direta via IP Privado do Cloud SQL (Igualzinho ao LiteLLM)
+      - DATABASE_URL=postgresql://user_openwebui:${DB_PASSWORD}@${DB_HOST}:5432/db_openwebui?sslmode=require
       
       # Pool de Conexões Otimizado do SQLAlchemy
       - DATABASE_POOL_SIZE=20
@@ -82,8 +63,6 @@ services:
       # Otimização de Concorrência e Workers (Mitigação de OOM na VM física)
       - WEB_CONCURRENCY=3
     depends_on:
-      cloud-sql-proxy:
-        condition: service_healthy
       litellm-auth-bridge:
         condition: service_healthy
     networks:
