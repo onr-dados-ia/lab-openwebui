@@ -340,8 +340,13 @@ services:
       - OPENAI_API_BASE_URLS=http://10.75.0.3:4000/v1
       - OPENAI_API_KEYS=${LITELLM_MASTER_KEY}
       
-      # Segurança de Cadastro - Domínio Estrito ONR (US01)
-      - ENABLE_SIGNUP=true
+      # Segurança de Cadastro - Domínio Estrito ONR & Google SSO (US01)
+      - ENABLE_SIGNUP=false             # Desativa cadastros tradicionais por e-mail/senha locais
+      - ENABLE_OAUTH_SIGNUP=true        # Ativa o fluxo de cadastro e login por provedores OAuth
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_CLIENT_REDIRECT_URI=https://ia.onr.org.br/oauth/google/callback
+      - GOOGLE_ALLOWED_DOMAINS=onr.org.br
       - WHITELIST_SIGNUP_DOMAINS=onr.org.br
       - DEFAULT_USER_ROLE=user
       
@@ -426,11 +431,17 @@ http {
         ssl_certificate     /etc/nginx/ssl/onr-ia-cert.crt;
         ssl_certificate_key /etc/nginx/ssl/onr-ia-key.key;
 
-        # Proteções de Segurança Básicas (Headers HTTP)
+        # Proteções de Segurança Básicas, CORS e Clickjacking (Headers HTTP)
         add_header X-Frame-Options "DENY" always;
         add_header X-Content-Type-Options "nosniff" always;
         add_header X-XSS-Protection "1; mode=block" always;
         add_header Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data:; connect-src 'self' https://ia.onr.org.br;" always;
+        
+        # Restrição Rigorosa de CORS (Cross-Origin Resource Sharing)
+        add_header Access-Control-Allow-Origin "https://ia.onr.org.br" always;
+        add_header Access-Control-Allow-Methods "GET, POST, OPTIONS, DELETE, PUT" always;
+        add_header Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With, X-API-Key, X-Product-Token" always;
+        add_header Access-Control-Allow-Credentials "true" always;
 
         # Configurações de timeout ampliadas para respostas de IA
         proxy_connect_timeout 600s;

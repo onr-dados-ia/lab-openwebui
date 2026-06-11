@@ -51,7 +51,32 @@ Disponibilizar uma interface de chat web amigável, intuitiva, rica em recursos 
 
 *   **Padrão INVEST:**
     *   **I**ndependent: Pode ser implementada ativando os parâmetros OAuth2 nativos do Open WebUI.
-    *   
+    *   **N**egotiable: Configurações de redirecionamento e mapeamento de chaves de API do Google Cloud Console são parametrizáveis.
+    *   **V**aluable: Elimina a fadiga de senhas, garante desativação automática de ex-colaboradores (atrelado ao e-mail institucional) e reforça a segurança da informação do ONR.
+    *   **E**stimable: Complexidade moderada (3 Story Points).
+    *   **S**mall: Focada estritamente no fluxo de login único (Single Sign-On - SSO) via Google OIDC.
+    *   **T**estable: Validável por login com conta corporativa Google `@onr.org.br` e verificação de bloqueio para contas externas.
+
+*   **Critérios de Aceite (BDD - Gherkin):**
+    *   **Cenário 1: Autenticação bem-sucedida com domínio corporativo**
+        *   **Dado que** o login corporativo do Google está habilitado no Open WebUI
+        *   **Quando** o usuário clica no botão "Entrar com o Google" e fornece credenciais válidas do domínio `@onr.org.br`
+        *   **Então** o sistema permite a entrada e cria de forma transparente o perfil pessoal do colaborador.
+    *   **Cenário 2: Bloqueio de contas Google pessoais ou externas**
+        *   **Dado que** o login único do Google está ativo e a whitelist de domínios corporativos está configurada
+        *   **Quando** um usuário tenta entrar utilizando uma conta pessoal (ex: `@gmail.com`) ou de outro domínio externo
+        *   **Então** o sistema de autenticação rejeita a entrada, exibe uma mensagem de erro ("Domínio de e-mail não autorizado para o ONR") e bloqueia o acesso à interface.
+    *   **Cenário 3: Primeiro login promovido a Administrador**
+        *   **Dado que** o sistema acabou de ser provisionado e não possui administradores cadastrados
+        *   **Quando** o primeiro usuário corporativo autentica com sucesso via Google SSO
+        *   **Então** sua conta é registrada com a role de Administrador, permitindo o gerenciamento subsequente de acessos e configurações.
+
+*   **Definition of Ready (DoR):**
+    *   Criação da credencial do OAuth 2.0 no Google Cloud Console (Client ID e Client Secret) sob o domínio corporativo do ONR.
+    *   URL de redirecionamento definida (`https://ia.onr.org.br/oauth/google/callback` ou similar).
+*   **Definition of Done (DoD):**
+    *   O Client ID e Client Secret do Google OAuth injetados no runtime como variáveis de ambiente, obtidos diretamente do GCP Secret Manager.
+    *   Botão "Entrar com o Google" funcional na interface de login, com desativação total de cadastros tradicionais locais via e-mail/senha caso exigido pela política de segurança do ONR.
 
 ---
 

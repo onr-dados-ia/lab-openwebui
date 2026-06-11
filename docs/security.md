@@ -4,18 +4,26 @@ Este documento define os padrões mandatórios de segurança, privacidade (LGPD)
 
 ---
 
-## 1. Controle de Acesso e Segurança de APIs
+## 1. Controle de Acesso, Autenticação Corporativa (SSO) e Segurança de APIs
 
-Para garantir a rastreabilidade e evitar o uso indevido ou não autorizado dos modelos de IA, todas as conexões lógicas devem respeitar as diretrizes de autenticação em dois níveis estabelecidas pelo ONR:
+Para garantir a segurança, integridade e a rastreabilidade dos acessos ao ecossistema de IA do ONR, foram estabelecidas restrições rígidas baseadas na identidade corporativa e nos canais de comunicação com APIs:
 
-1.  **Autenticação em Dois Níveis:**
-    *   **X-API-Key:** Chave de API rotativa do projeto, que valida se a requisição originou-se de uma aplicação homologada (o container do Open WebUI).
-    *   **X-Product-Token:** Token do cliente ou identificador do produto que está realizando a requisição, utilizado para rastreamento de uso, auditoria de consumo e bilhetagem interna (billing).
-    *   Toda requisição enviada do Open WebUI para o LiteLLM deve portar ambos os cabeçalhos em suas requisições HTTP internas.
+### 1.1. Autenticação Obrigatória via Google SSO (OAuth2 / OIDC)
+*   **Identidade Unificada (Google Workspace):** Fica estritamente **proibida** a utilização de contas locais (cadastro tradicional via e-mail e senha criados localmente) em produção. O acesso à interface do Open WebUI deve ser mediado obrigatoriamente pelo login corporativo do Google (`@onr.org.br`).
+*   **Controles de Segurança e Variáveis Mandatórias:**
+    *   `ENABLE_SIGNUP=False`: Bloqueia o formulário de cadastro comum de usuários locais.
+    *   `ENABLE_OAUTH_SIGNUP=True`: Permite o registro automático apenas de perfis autenticados por provedores OAuth homologados.
+    *   `GOOGLE_ALLOWED_DOMAINS=onr.org.br`: Whitelist de segurança configurada no nível de token OIDC, instruindo a aplicação a rejeitar qualquer tentativa de login que se origine de e-mails públicos (ex: `@gmail.com`) ou de outras organizações, mesmo que a autenticação no Google tenha sido concluída com sucesso.
+*   **Revogação e Gestão de Contas:** Em conformidade com as diretrizes de governança do ONR, a demissão ou desativação de uma conta de colaborador no Google Workspace bloqueia imediatamente o acesso do mesmo ao Open WebUI e a todo o histórico de conversas de IA de forma automática (zero delay de provisionamento).
 
-2.  **Caching Seguro de Segredos (Thread-Safe):**
-    *   Para mitigar latência, custos e excesso de chamadas de rede à API do **GCP Secret Manager**, a leitura de chaves de autenticação e segredos deve obrigatoriamente utilizar um mecanismo de cache em memória.
-    *   O cache deve ser implementado de forma thread-safe (usando bibliotecas como `cachetools` com `Lock`) com um **TTL (Time-To-Live) máximo de 1 hora**.
+### 1.2. Autenticação de APIs em Dois Níveis
+*   **X-API-Key:** Chave de API rotativa do projeto, que valida se a requisição originou-se de uma aplicação homologada (o container do Open WebUI).
+*   **X-Product-Token:** Token do cliente ou identificador do produto que está realizando a requisição, utilizado para rastreamento de uso, auditoria de consumo e bilhetagem interna (billing).
+*   Toda requisição enviada do Open WebUI para o LiteLLM deve portar ambos os cabeçalhos em suas requisições HTTP internas.
+
+### 1.3. Caching Seguro de Segredos (Thread-Safe)
+*   Para mitigar latência, custos e excesso de chamadas de rede à API do **GCP Secret Manager**, a leitura de chaves de autenticação e segredos (incluindo as credenciais `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET`) deve obrigatoriamente utilizar um mecanismo de cache em memória.
+*   O cache deve ser implementado de forma thread-safe (usando bibliotecas como `cachetools` com `Lock`) com um **TTL (Time-To-Live) máximo de 1 hora**.
 
 ---
 
