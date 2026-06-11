@@ -253,7 +253,16 @@ Como o Open WebUI divide a memória RAM e a CPU com o LiteLLM na mesma VM, as se
     WHITELIST_SIGNUP_DOMAINS=onr.org.br
     DEFAULT_USER_ROLE=user          # Papel padrão não-admin na inicialização
     ```
-*   **Armazenamento de Chaves e Segredos:** Todas as strings de conexão e chaves de API devem ser injetadas dinamicamente na inicialização do container utilizando variáveis de ambiente fornecidas pelo GCP Secret Manager ou por ferramentas de gerenciamento de configurações seguras, em conformidade com o DoD (Definition of Done) estabelecido pelo PO.
+*   **Armazenamento de Chaves e Segredos & Cache Thread-Safe (AppSec):**
+    Para mitigar latências de I/O de rede redundantes e picos de custos operacionais com consultas consecutivas ao GCP Secret Manager, as leituras de segredos (como chaves de autenticação OIDC do Google, strings JDBC de conexões de banco e credenciais leste-oeste) devem ser armazenadas em um cache em memória.
+    *   **Padrão de Cache:** O cache deve ser estritamente thread-safe no ecossistema (usando padrões como `cachetools` protegido por `Lock` nativo do Python ou similar).
+    *   **Tempo de Expiração (TTL):** Definido para expirar em **1 hora** (`TTL=3600s`), forçando a rotação de segredos e leitura atualizada sob demanda de forma segura sem onerar os limites de cota da API da Google Cloud.
+    *   **Chaves de Roteamento (Header de Dois Níveis):** Toda comunicação direcionada para o gateway LiteLLM deve herdar do cache os headers estipulados de forma paralela e isolada (`X-API-Key` e `X-Product-Token`).
+
+*   **Governança de Dados Sensíveis e RAG (LGPD):**
+    *   O upload de arquivos e documentos por parte dos colaboradores é armazenado no banco vetorial ChromaDB local no volume persistente `/app/backend/data`.
+    *   O processamento de RAG deve ser monitorado de forma a evitar a injeção acidental de dados pessoais em contextos de prompts de sistemas compartilhados.
+    *   Os usuários possuem o direito de exclusão do seu próprio histórico, gerando uma requisição de exclusão física dos chats no banco de dados dedicado e exclusão lógica de seus fragmentos de embeddings no ChromaDB local.
 
 ---
 

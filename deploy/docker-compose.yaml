@@ -1,0 +1,110 @@
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. Cloud SQL Auth Proxy: Garante a conexão privada e criptografada com o PostgreSQL
+  # ---------------------------------------------------------------------------
+  cloud-sql-proxy:
+    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.2
+    container_name: cloud-sql-proxy
+    # Estabelece conexão à instância exclusiva de banco utilizando credenciais do IAM da VM
+    command:
+      - "--private-ip"
+      - "--port=5432"
+      - "projeto-ai-ml-develop:southamerica-east1:openwebui-db"
+    restart: always
+    expose:
+      - "5432"
+    networks:
+      - onr_ia_network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 2. Open WebUI: Interface de Chat Oficial para Colaboradores do ONR
+  # ---------------------------------------------------------------------------
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: always
+    expose:
+      - "8080"
+    volumes:
+      - openwebui_data:/app/backend/data
+    environment:
+      # Conexão JDBC criptografada mapeada localmente via Cloud SQL Proxy
+      - DATABASE_URL=postgresql://user_openwebui:${DB_PASSWORD}@cloud-sql-proxy:5432/db_openwebui?sslmode=disable
+      
+      # Pool de Conexões Otimizado do SQLAlchemy
+      - DATABASE_POOL_SIZE=20
+      - DATABASE_POOL_MAX_OVERFLOW=10
+      - DATABASE_POOL_RECYCLE=1800
+      - DATABASE_POOL_TIMEOUT=30
+      
+      # Conexão estrita de rede com o gateway LiteLLM externo na VPC do ONR
+      - OPENAI_API_BASE_URL=http://10.75.0.3:4000/v1
+      - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
+      - OPENAI_API_BASE_URLS=http://10.75.0.3:4000/v1
+      - OPENAI_API_KEYS=${LITELLM_MASTER_KEY}
+      
+      # Autenticação Obrigatória via Google SSO Workspace (US01)
+      - ENABLE_SIGNUP=false             # Desativa o cadastro comum e-mail/senha nativo
+      - ENABLE_OAUTH_SIGNUP=true        # Ativa o fluxo por provedor de identidade OAuth
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_CLIENT_REDIRECT_URI=https://ia.onr.org.br/oauth/google/callback
+      - GOOGLE_ALLOWED_DOMAINS=onr.org.br
+      - WHITELIST_SIGNUP_DOMAINS=onr.org.br
+      - DEFAULT_USER_ROLE=user          # Papel inicial de novos colaboradores
+      
+      # Otimização de Concorrência e Workers (Mitigação de OOM na VM física)
+      - WEB_CONCURRENCY=3
+    depends_on:
+      cloud-sql-proxy:
+        condition: service_healthy
+    networks:
+      - onr_ia_network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # 3. Proxy Reverso Nginx: Terminação SSL e Proteção de Borda
+  # ---------------------------------------------------------------------------
+  nginx-proxy:
+    image: nginx:1.25-alpine
+    container_name: nginx-proxy
+    restart: always
+    ports:
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/ssl/certs/onr-ia-cert.crt:/etc/nginx/ssl/onr-ia-cert.crt:ro
+      - /etc/ssl/private/onr-ia-key.key:/etc/nginx/ssl/onr-ia-key.key:ro
+    depends_on:
+      - open-webui
+    networks:
+      - onr_ia_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+networks:
+  onr_ia_network:
+    driver: bridge
+
+volumes:
+  openwebui_data:
+    driver: local
