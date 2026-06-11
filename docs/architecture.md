@@ -177,21 +177,28 @@ O Open WebUI foi projetado para se integrar nativamente com APIs compatíveis co
 
 O Open WebUI e o LiteLLM estão integrados dentro da rede privada `vpc-shared-produtos` do ONR (subrede `subrede-ai-ml-develop`). O Open WebUI consome o LiteLLM através de seu IP privado `10.75.0.3` na porta `4000`. Isso garante que todo o tráfego permaneça dentro do barramento corporativo do ONR sem transitar pela internet.
 
-### 5.2. Configurações de Integração do Open WebUI
+### 5.2. Configurações de Integração do Open WebUI (User-Based API Keys)
 
-O container do Open WebUI deve ser configurado com as seguintes variáveis de ambiente:
+Para que cada colaborador seja individualmente bilhetado, auditado e tenha suas permissões lógicas de modelos gerenciadas de forma única no LiteLLM, o Open WebUI **não utilizará uma chave de API global/genérica do LiteLLM** em suas variáveis de ambiente no container.
 
-```bash
-# Aponta a integração OpenAI padrão para o endereço IP privado do LiteLLM
-OPENAI_API_BASE_URL=http://10.75.0.3:4000/v1
+*   **Configuração de Endpoint do Gateway (Sem chave estática):**
+    O container do Open WebUI será configurado de modo a direcionar todas as chamadas apenas para o endereço base, sem fornecer uma credencial comum:
+    ```bash
+    # Aponta a integração padrão para a rota interna da VPC do LiteLLM
+    OPENAI_API_BASE_URL=http://10.75.0.3:4000/v1
+    OPENAI_API_BASE_URLS=http://10.75.0.3:4000/v1
+    
+    # Deixar as chaves estáticas vazias ou desativadas obriga a interface a requisitar a chave individual
+    OPENAI_API_KEY=""
+    OPENAI_API_KEYS=""
+    ```
 
-# Injeta a chave de acesso do gateway configurada previamente no LiteLLM
-OPENAI_API_KEY=sk-onr-gateway-security-token-mvp-2026
-
-# Desativa chamadas diretas externas para a OpenAI para evitar desvios no ecossistema
-OPENAI_API_BASE_URLS=http://10.75.0.3:4000/v1
-OPENAI_API_KEYS=sk-onr-gateway-security-token-mvp-2026
-```
+*   **Fluxo de Autenticação e Configuração por Usuário (User Profile Keys):**
+    1.  O colaborador realiza a autenticação na plataforma via **Google Workspace SSO**.
+    2.  No primeiro acesso, ou através do painel de **Configurações Pessoais (Profile Settings)** na interface web do Open WebUI, o usuário é instruído a cadastrar a sua **Chave de API do LiteLLM** individual (previamente emitida para ele pela coordenação de IA).
+    3.  A chave do usuário é salva de forma criptografada pelo Open WebUI no banco de dados exclusivo do Cloud SQL (**`db_openwebui`**).
+    4.  Ao iniciar qualquer interação de chat, o backend do Open WebUI recupera do banco a chave privada do usuário específico e anexa o respectivo token de portador (`Authorization: Bearer <CHAVE_INDIVIDUAL_DO_USUARIO>`) nas requisições direcionadas para `http://10.75.0.3:4000/v1`.
+    5.  O gateway LiteLLM recebe a requisição, lê o token, identifica o colaborador associado, valida as permissões de acesso daquela chave aos modelos de IA solicitados, e **registra o consumo, custos e logs diretamente vinculados ao perfil desse usuário**.
 
 ### 5.3. Sincronização e Governança de Modelos
 

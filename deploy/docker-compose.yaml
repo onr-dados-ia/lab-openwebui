@@ -44,11 +44,11 @@ services:
       - DATABASE_POOL_RECYCLE=1800
       - DATABASE_POOL_TIMEOUT=30
       
-      # Conexão estrita de rede com o gateway LiteLLM externo na VPC do ONR
+      # Conexão de rede com o gateway LiteLLM externo na VPC do ONR (Chave sob controle do Usuário)
       - OPENAI_API_BASE_URL=http://10.75.0.3:4000/v1
-      - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
+      - OPENAI_API_KEY=                 # Força a interface a exigir a chave privada individual de cada usuário
       - OPENAI_API_BASE_URLS=http://10.75.0.3:4000/v1
-      - OPENAI_API_KEYS=${LITELLM_MASTER_KEY}
+      - OPENAI_API_KEYS=""
       
       # Autenticação Obrigatória via Google SSO Workspace (US01)
       - ENABLE_SIGNUP=false             # Desativa o cadastro comum e-mail/senha nativo
