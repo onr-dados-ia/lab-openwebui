@@ -55,7 +55,8 @@ services:
       - ENABLE_OAUTH_SIGNUP=true        # Ativa o fluxo por provedor de identidade OAuth
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - GOOGLE_CLIENT_REDIRECT_URI=https://ia.onr.org.br/oauth/google/callback
+      # URI de redirecionamento dinâmico baseado no endereço IP ou Wildcard DNS sslip.io (Exemplo: http://35.x.x.x.sslip.io/oauth/google/callback)
+      - GOOGLE_CLIENT_REDIRECT_URI=${GOOGLE_CLIENT_REDIRECT_URI}
       - GOOGLE_ALLOWED_DOMAINS=onr.org.br
       - WHITELIST_SIGNUP_DOMAINS=onr.org.br
       - DEFAULT_USER_ROLE=user          # Papel inicial de novos colaboradores
@@ -79,18 +80,16 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 3. Proxy Reverso Nginx: Terminação SSL e Proteção de Borda
+  # 3. Proxy Reverso Nginx: Terminação SSL/HTTP e Proteção de Borda
   # ---------------------------------------------------------------------------
   nginx-proxy:
     image: nginx:1.25-alpine
     container_name: nginx-proxy
     restart: always
     ports:
-      - "443:443"
+      - "80:80" # Mapeia porta HTTP 80 para acesso flexível sem DNS e SSL provisórios
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - /etc/ssl/certs/onr-ia-cert.crt:/etc/nginx/ssl/onr-ia-cert.crt:ro
-      - /etc/ssl/private/onr-ia-key.key:/etc/nginx/ssl/onr-ia-key.key:ro
     depends_on:
       - open-webui
     networks:
