@@ -26,22 +26,17 @@ services:
   # 2. LiteLLM Auth Bridge: Ponte de autenticação usando credenciais do LiteLLM
   # ---------------------------------------------------------------------------
   litellm-auth-bridge:
-    image: python:3.11-slim
+    image: southamerica-east1-docker.pkg.dev/projeto-ai-ml-develop/onr-ia-registry/litellm-auth-bridge:latest
     container_name: litellm-auth-bridge
     restart: always
     expose:
       - "5000"
-    volumes:
-      - ./auth_bridge:/app
-    working_dir: /app
     environment:
       - LITELLM_API_BASE=http://10.75.0.3:4000
-    command: >
-      bash -c "pip install fastapi uvicorn requests && uvicorn main:app --host 0.0.0.0 --port 5000"
     networks:
       - onr_ia_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -108,13 +103,11 @@ services:
   # 3. Proxy Reverso Nginx: Terminação SSL/HTTP e Proteção de Borda
   # ---------------------------------------------------------------------------
   nginx-proxy:
-    image: nginx:1.25-alpine
+    image: southamerica-east1-docker.pkg.dev/projeto-ai-ml-develop/onr-ia-registry/nginx-proxy:latest
     container_name: nginx-proxy
     restart: always
     ports:
       - "80:80" # Mapeia porta HTTP 80 para acesso flexível sem DNS e SSL provisórios
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - open-webui
     networks:
