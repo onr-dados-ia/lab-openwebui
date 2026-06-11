@@ -22,26 +22,26 @@ graph TB
     Provedores["Gateway Externo de IAs<br/>(Azure OpenAI, AWS, Anthropic)"]:::ext
 
     %% GCP Project Boundary
-    subgraph GCP_Project ["GCP Project: onr-ia-prod"]
+    subgraph GCP_Project ["GCP Project: projeto-ai-ml-develop"]
         
-        subgraph VPC_Network ["VPC Network: vpc-onr-ia"]
+        subgraph VPC_Network ["VPC Network: vpc-shared-produtos (Project: onr-shared)"]
             
-            subgraph Subnet_App ["Subnet: subnet-ia-app (10.150.10.0/24)"]
+            subgraph Subnet_App ["Subnet: subrede-ai-ml-develop"]
                 
-                subgraph VM_GCE ["Compute Engine Instance: gce-ia-shared-vm"]
+                subgraph VM_GCE ["Compute Engine Instance: gce-openwebui-vm"]
                     %% Serviços dentro da VM
-                    subgraph Docker_Compose ["Docker Compose Multihost Environment"]
+                    subgraph Docker_Compose ["Docker Compose Environment"]
                         Nginx["Proxy Reverso Nginx<br/>(Porta 443 HTTPS)"]:::vm
                         OpenWebUI["Open WebUI Service<br/>(Porta 8080 HTTP)"]:::vm
-                        LiteLLM["LiteLLM Service<br/>(Porta 4000 HTTP)"]:::vm
-                        AuthProxy["Cloud SQL Auth Proxy<br/>(Porta 127.0.0.1:5432)"]:::vm
                     end
                 end
+
+                LiteLLM["LiteLLM Gateway<br/>(Hospedado em 10.75.0.3:4000)"]:::vm
                 
             end
 
-            subgraph Subnet_DB ["Subnet: subnet-ia-db (10.150.20.0/24 - Private Service Access)"]
-                CloudSQL[("GCP Cloud SQL PostgreSQL<br/>(db-onr-ia-prod-psql)<br/>[Internal IP Only]")]:::db
+            subgraph Subnet_DB ["Cloud SQL Subnetwork (Private Service Access)"]
+                CloudSQL[("GCP Cloud SQL PostgreSQL<br/>(litellm-db)<br/>[Private IP: 10.59.156.17]")]:::db
             end
 
             %% Security Perimeters & Gateways
@@ -57,21 +57,21 @@ graph TB
     Colaborador -- "HTTPS (Porta 443)<br/>Restrito à WAN Corporativa / VPN" --> Firewall
     Firewall --> Nginx
     Nginx -- "Proxying (Porta 8080)" --> OpenWebUI
-    OpenWebUI -- "Internal Network Loopback<br/>(http://localhost:4000/v1)" --> LiteLLM
+    OpenWebUI -- "VPC Internal Routing<br/>(http://10.75.0.3:4000/v1)" --> LiteLLM
     
     %% Comunicação com Banco e Externos
-    OpenWebUI -- "SQL Queries (127.0.0.1:5432)" --> AuthProxy
-    AuthProxy -- "TCP Seguro Encapsulado (IAM Auth)" --> CloudSQL
+    OpenWebUI -- "SQL Queries via IP Privado (10.59.156.17:5432)" --> CloudSQL
     LiteLLM -- "Chamadas HTTPS através de" --> CloudNAT
     CloudNAT -- "Egress Autorizado" --> Provedores
 ```
 
 ### Componentes de Rede e Infraestrutura de Borda:
-1. **Instância GCE (`gce-ia-shared-vm`):** Hospeda os containers em Docker Compose sob sistema operacional Ubuntu 22.04 LTS. Compartilha custos de computação entre Open WebUI e LiteLLM.
-2. **Cloud SQL PostgreSQL (`db-onr-ia-prod-psql`):** Instância regional gerenciada sem endereço IP público. O acesso é feito estritamente de maneira interna via **Private Service Access** (VPC Peering) ou de forma criptografada usando o container sidecar do **Cloud SQL Auth Proxy** com autenticação baseada em Service Account do GCP.
-3. **Firewall Rules (VPC):** Regras de firewall estritas que barram todo o tráfego externo, permitindo requisições na porta 443 (HTTPS) apenas se provenientes dos blocos de IP de VPN/Sede corporativa do ONR.
-4. **Cloud NAT:** Permite que a VM instale atualizações de sistema operacional e que o LiteLLM faça requisições externas para as APIs de IAs externas, sem expor a VM à internet pública por meio de IP público de entrada.
-5. **VPC Service Controls (VPSC):** Perímetro de segurança lógico que evita a exfiltração de dados (por exemplo, backups do Cloud SQL sendo desviados para buckets externos não pertencentes à organização).
+1. **Instância GCE (`gce-openwebui-vm`):** Hospeda os containers do Open WebUI e Proxy Reverso em Docker Compose sob sistema operacional Ubuntu 22.04 LTS, localizada na rede `vpc-shared-produtos` (subrede `subrede-ai-ml-develop`).
+2. **Cloud SQL PostgreSQL (`litellm-db`):** Instância existente PostgreSQL 16 (Tier `db-f1-micro`) no projeto `projeto-ai-ml-develop` com IP privado **10.59.156.17**. O acesso é feito de maneira interna via Private Service Access (VPC Peering), e será criada uma base de dados exclusiva para o Open WebUI (`db_openwebui`).
+3. **LiteLLM Gateway:** Rodando no endereço privado **10.75.0.3:4000**, consumido de forma direta pela subrede `subrede-ai-ml-develop`.
+4. **Firewall Rules (VPC):** Regras de firewall estritas que barram todo o tráfego externo, permitindo requisições na porta 443 (HTTPS) apenas se provenientes dos blocos de IP de VPN/Sede corporativa do ONR.
+5. **Cloud NAT:** Permite que a VM instale atualizações de sistema operacional e que o LiteLLM faça requisições externas para as APIs de IAs externas, sem expor a VM à internet pública por meio de IP público de entrada.
+6. **VPC Service Controls (VPSC):** Perímetro de segurança lógico que evita a exfiltração de dados (por exemplo, backups do Cloud SQL sendo desviados para buckets externos não pertencentes à organização).
 
 ---
 
@@ -122,7 +122,7 @@ provider "google" {
 variable "project_id" {
   type        = string
   description = "ID do projeto do GCP onde os recursos de IA corporativos do ONR estão alocados"
-  default     = "onr-ia-prod"
+  default     = "projeto-ai-ml-develop"
 }
 
 variable "region" {
@@ -137,7 +137,7 @@ variable "zone" {
 
 variable "vpc_name" {
   type    = string
-  default = "vpc-onr-ia"
+  default = "vpc-shared-produtos"
 }
 ```
 
@@ -285,7 +285,7 @@ resource "google_project_iam_member" "monitoring_metric_writer" {
 
 ## 4. Orquestração Multi-Serviço (`docker-compose.yaml`)
 
-Abaixo está o arquivo `docker-compose.yaml` completo e auto-portável, pronto para ser executado no servidor `gce-ia-shared-vm`. Ele gerencia a coexistência e interconexão local dos containers do Open WebUI, LiteLLM, Proxy Reverso HTTPS (Nginx) e o Cloud SQL Auth Proxy de forma integrada.
+Abaixo está o arquivo `docker-compose.yaml` completo e auto-portável, pronto para ser executado no servidor `gce-openwebui-vm` do ONR. Como o **LiteLLM** já se encontra deployado e operacional em `10.75.0.3:4000`, a stack local é simplificada, necessitando rodar apenas o container do **Open WebUI**, o **Proxy Reverso HTTPS (Nginx)** e o **Cloud SQL Auth Proxy** (para encapsular de forma criptografada as queries via IP privado do PostgreSQL a partir de credenciais temporárias do IAM).
 
 ```yaml
 version: '3.8'
@@ -301,7 +301,7 @@ services:
     command:
       - "--private-ip"
       - "--port=5432"
-      - "onr-ia-prod:southamerica-east1:db-onr-ia-prod-psql"
+      - "projeto-ai-ml-develop:southamerica-east1:litellm-db"
     restart: always
     expose:
       - "5432"
@@ -314,36 +314,7 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 2. LiteLLM: Gateway Corporativo de Governança de IAs do ONR
-  # ---------------------------------------------------------------------------
-  litellm:
-    image: ghcr.io/berriai/litellm:main-v1.35.0
-    container_name: litellm-gateway
-    restart: always
-    expose:
-      - "4000"
-    volumes:
-      - ./litellm/config.yaml:/app/config.yaml:ro
-    environment:
-      - AZURE_API_KEY=${AZURE_API_KEY}
-      - AZURE_API_BASE=${AZURE_API_BASE}
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug", "false"]
-    networks:
-      - ia_network
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 2G
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:4000/health/readiness || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-
-  # ---------------------------------------------------------------------------
-  # 3. Open WebUI: Interface de Chat Oficial para Colaboradores do ONR
+  # 2. Open WebUI: Interface de Chat Oficial para Colaboradores do ONR
   # ---------------------------------------------------------------------------
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
@@ -354,7 +325,7 @@ services:
     volumes:
       - openwebui_data:/app/backend/data
     environment:
-      # Conexão segura através do loopback do proxy local
+      # Conexão segura através do proxy de banco local (apontando para litellm-db na porta 5432)
       - DATABASE_URL=postgresql://user_openwebui:${DB_PASSWORD}@cloud-sql-proxy:5432/db_openwebui?sslmode=disable
       
       # Pool de Conexões Otimizado
@@ -363,10 +334,10 @@ services:
       - DATABASE_POOL_RECYCLE=1800
       - DATABASE_POOL_TIMEOUT=30
       
-      # Conexão estrita com o Gateway LiteLLM (Loopback na rede Docker)
-      - OPENAI_API_BASE_URL=http://litellm:4000/v1
+      # Conexão estrita com o Gateway LiteLLM (Hospedado externamente na VPC)
+      - OPENAI_API_BASE_URL=http://10.75.0.3:4000/v1
       - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
-      - OPENAI_API_BASE_URLS=http://litellm:4000/v1
+      - OPENAI_API_BASE_URLS=http://10.75.0.3:4000/v1
       - OPENAI_API_KEYS=${LITELLM_MASTER_KEY}
       
       # Segurança de Cadastro - Domínio Estrito ONR (US01)
@@ -378,8 +349,6 @@ services:
       - WEB_CONCURRENCY=3
     depends_on:
       cloud-sql-proxy:
-        condition: service_healthy
-      litellm:
         condition: service_healthy
     networks:
       - ia_network
@@ -395,7 +364,7 @@ services:
       retries: 3
 
   # ---------------------------------------------------------------------------
-  # 4. Proxy Reverso Nginx: Terminação SSL e Proteção de Borda
+  # 3. Proxy Reverso Nginx: Terminação SSL e Proteção de Borda
   # ---------------------------------------------------------------------------
   nginx-proxy:
     image: nginx:1.25-alpine
