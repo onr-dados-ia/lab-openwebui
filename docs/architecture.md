@@ -9,7 +9,7 @@ Este documento detalha o desenho arquitetural, topologia de rede, modelo de pers
 O ecossistema de Inteligência Artificial do ONR necessita de uma interface de chat unificada, segura, auditável e de alto desempenho para colaboradores internos. Com base nessas premissas, as seguintes decisões técnicas estruturais foram tomadas:
 
 1. **Coabitação Estratégica no GCP:** O **Open WebUI** e o **LiteLLM** serão executados no mesmo ecossistema do GCP, integrados na VPC `vpc-shared-produtos` (Projeto: `onr-shared`) usando a subrede `subrede-ai-ml-develop`. O **Open WebUI** consome o **LiteLLM** de forma direta através do IP privado `10.75.0.3:4000`, o que simplifica as regras de roteamento de rede internas e reduz a latência.
-2. **Persistência Centralizada e Resiliente (GCP Cloud SQL PostgreSQL):** Integração com a instância gerenciada existente **litellm-db** (PostgreSQL 16, Tier `db-f1-micro`) no projeto **projeto-ai-ml-develop** através do IP privado **10.59.156.17**. Será criado um banco de dados dedicado `db_openwebui` nesta instância para garantir o isolamento lógico e a segurança de dados de acordo com a LGPD.
+2. **Persistência Centralizada e Resiliente (GCP Cloud SQL PostgreSQL Dedicado):** Criação de uma instância gerenciada **exclusiva e dedicada** no Cloud SQL PostgreSQL (PostgreSQL 16, Tier recomendado `db-custom-1-3840` ou `db-g1-small` para desenvolvimento/homologação) no projeto **projeto-ai-ml-develop**, acessada através de seu próprio IP privado na VPC. Isso assegura o isolamento total de dados, desempenho garantido e evita a concorrência de recursos físicos (CPU, RAM, limites de conexões) com o banco `litellm-db` que roda em um tier extremamente enxuto (`db-f1-micro` que tem apenas 0.6 GB de RAM e não suporta carga concorrente de duas aplicações distintas).
 3. **Autenticação Restrita ao Domínio Corporativo:** O acesso ao Open WebUI será estritamente bloqueado para usuários externos por meio do controle de domínio institucional (`@onr.org.br`), com o primeiro usuário se cadastrando automaticamente promovido a administrador para governança interna.
 4. **Isolamento de Conectividade:** A comunicação com APIs externas de LLMs (Azure OpenAI, AWS Bedrock, Anthropic, etc.) é de responsabilidade exclusiva do **LiteLLM**, que atua como gateway de governança, auditoria de custos e criptografia de credenciais. O Open WebUI comunica-se estritamente com o LiteLLM, sem conhecimento das credenciais finais dos provedores externos.
 
@@ -76,8 +76,8 @@ graph TB
     LiteLLM["LiteLLM Gateway<br/>(Gateway OpenAI-Compatible)<br/>[Hospedado em 10.75.0.3:4000]"]:::container
 
     %% Banco de Dados Externo à VM (Serviço Gerenciado no projeto projeto-ai-ml-develop)
-    subgraph GCP_Cloud_SQL ["GCP Cloud SQL (litellm-db)"]
-        PostgreSQL_DB[("PostgreSQL Instance<br/>(IP Privado: 10.59.156.17)")]:::db_container
+    subgraph GCP_Cloud_SQL ["GCP Cloud SQL PostgreSQL"]
+        PostgreSQL_DB[("Open WebUI Dedicated DB<br/>(openwebui-db)<br/>[Private IP: Novo IP Privado]")]:::db_container
     end
 
     %% Fluxos de Comunicação (Protocolos e Portas)
@@ -89,7 +89,7 @@ graph TB
     
     %% Persistência de Dados e RAG Local
     OpenWebUI -- "Persistência do Estado e Embeddings Locais" --> DockerVolume
-    OpenWebUI -- "TCP / PostgreSQL Protocol (Porta 5432) via IP Privado (10.59.156.17)" --> PostgreSQL_DB
+    OpenWebUI -- "TCP / PostgreSQL Protocol (Porta 5432) via IP Privado Dedicado" --> PostgreSQL_DB
     
     %% Roteamento externo de chamadas do LLM
     LiteLLM -- "HTTPS (Porta 443) com chaves autenticadas" --> ProvedoresIA
@@ -134,7 +134,7 @@ A arquitetura lógica é projetada para otimizar a confiabilidade e garantir que
       │
       ├─► (A) Migrações na inicialização (PostgreSQL DDL) ──────┐
       │                                                          ▼
-      ├─► (B) Escrita transacional (Novo chat, db_openwebui) ────┼─► [Cloud SQL PostgreSQL: litellm-db (10.59.156.17:5432)]
+      ├─► (B) Escrita transacional (Novo chat, db_openwebui) ────┼─► [Cloud SQL PostgreSQL: openwebui-db (IP Privado:5432)]
       │                                                          ▲
       └─► (C) Leitura do histórico ao carregar a interface ──────┘
 ```
@@ -151,7 +151,7 @@ A configuração correta deve ser injetada no container do Open WebUI através d
 
 | Variável | Valor Recomendado / Descrição | Tipo | Exemplo |
 | :--- | :--- | :--- | :--- |
-| `DATABASE_URL` | String de conexão JDBC/SQLAlchemy que especifica o driver PostgreSQL e credenciais de acesso seguros. | String (Secret) | `postgresql://user_openwebui:secure_password@10.59.156.17:5432/db_openwebui?sslmode=require` |
+| `DATABASE_URL` | String de conexão JDBC/SQLAlchemy que especifica o driver PostgreSQL e credenciais de acesso seguros. | String (Secret) | `postgresql://user_openwebui:secure_password@<IP_PRIVADO_OPENWEBUI_DB>:5432/db_openwebui?sslmode=require` |
 | `DATABASE_POOL_SIZE` | Quantidade de conexões mantidas abertas simultaneamente por thread/processo. Otimiza o reuso de canais. | Inteiro | `20` |
 | `DATABASE_POOL_MAX_OVERFLOW` | Limite superior de conexões temporárias adicionais que podem ser criadas sob picos de tráfego. | Inteiro | `10` |
 | `DATABASE_POOL_RECYCLE` | Tempo máximo (em segundos) que uma conexão pode persistir antes de ser reiniciada (evita conexões "órfãs" devido a firewalls). | Inteiro | `1800` |
@@ -159,10 +159,10 @@ A configuração correta deve ser injetada no container do Open WebUI através d
 
 ### 4.2. Estratégia de Resiliência e Conexão ao Banco
 
-1. **Utilização do IP Privado via VPC:** 
-   O Open WebUI conecta-se diretamente à instância do PostgreSQL (`litellm-db`) pelo seu IP privado `10.59.156.17` através da VPC do ONR, com suporte a pool resiliente de conexões SQLAlchemy e SSL requerido. Opcionalmente, pode ser executado um container sidecar do `Cloud SQL Auth Proxy` dentro da VM para mediar a conexão sob autenticação IAM segura de Service Accounts.
+1. **Utilização do IP Privado via VPC Dedicada:** 
+   O Open WebUI conecta-se diretamente à sua instância dedicada do PostgreSQL (`openwebui-db`) pelo seu IP privado dinamicamente alocado através da VPC do ONR, com suporte a pool resiliente de conexões SQLAlchemy e SSL requerido. Opcionalmente, pode ser executado um container sidecar do `Cloud SQL Auth Proxy` dentro da VM para mediar a conexão sob autenticação IAM segura de Service Accounts.
    ```bash
-   DATABASE_URL=postgresql://user_openwebui:password@10.59.156.17:5432/db_openwebui?sslmode=require
+   DATABASE_URL=postgresql://user_openwebui:password@<IP_PRIVADO_OPENWEBUI_DB>:5432/db_openwebui?sslmode=require
    ```
 2. **Criptografia em Trânsito:** Toda conexão da aplicação para o Cloud SQL PostgreSQL deve exigir criptografia TLSv1.3 habilitando o parâmetro `sslmode=require` (ou `sslmode=verify-ca` caso sejam provisionados os certificados de CA corporativos).
 3. **Isolamento de Credenciais:** O banco de dados do Open WebUI deve ter um usuário (`user_openwebui`) e uma base de dados (`db_openwebui`) totalmente exclusivos, separados de qualquer base do LiteLLM, para garantir o princípio de menor privilégio.

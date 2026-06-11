@@ -164,22 +164,22 @@ resource "google_service_networking_connection" "private_vpc_connection" {
   reserved_peering_ranges = [google_compute_global_address.private_ip_alloc.name]
 }
 
-# Provisionamento da Instância Cloud SQL PostgreSQL Privada
+# Provisionamento da Instância Cloud SQL PostgreSQL Privada e Dedicada ao Open WebUI
 resource "google_sql_database_instance" "postgresql_instance" {
-  name             = "db-onr-ia-prod-psql"
-  database_version = "POSTGRES_15"
+  name             = "openwebui-db"
+  database_version = "POSTGRES_16" # Alinhado com a versão moderna PostgreSQL 16
   region           = var.region
   depends_on       = [google_service_networking_connection.private_vpc_connection]
 
   settings {
-    tier              = "db-custom-2-7680" # 2 vCPUs, 7.5 GB RAM (Ideal para banco compartilhado em prod)
-    availability_type = "REGIONAL"         # Alta Disponibilidade multi-zona para SLA > 99.5%
+    tier              = "db-g1-small" # Tier otimizado para o Open WebUI (1.7 GB RAM), evitando estouro físico de memória
+    availability_type = "ZONAL"        # Zonal para desenvolvimento/homologação (reduz custo pela metade em relação ao REGIONAL)
     disk_size         = 20
     disk_type         = "PD_SSD"
     disk_autoresize   = true               # Escalabilidade automática de disco conforme uso corporativo
 
     ip_configuration {
-      ipv4_enabled    = false # Desativa totalmente o IP Público
+      ipv4_enabled    = false # Desativa totalmente o IP Público (Apenas IP Privado)
       private_network = "projects/${var.project_id}/global/networks/${var.vpc_name}"
       require_ssl     = true  # Força conexão criptografada SSL/TLS
     }
@@ -301,7 +301,7 @@ services:
     command:
       - "--private-ip"
       - "--port=5432"
-      - "projeto-ai-ml-develop:southamerica-east1:litellm-db"
+      - "projeto-ai-ml-develop:southamerica-east1:openwebui-db"
     restart: always
     expose:
       - "5432"
@@ -325,7 +325,7 @@ services:
     volumes:
       - openwebui_data:/app/backend/data
     environment:
-      # Conexão segura através do proxy de banco local (apontando para litellm-db na porta 5432)
+      # Conexão segura através do proxy de banco local (apontando para openwebui-db na porta 5432)
       - DATABASE_URL=postgresql://user_openwebui:${DB_PASSWORD}@cloud-sql-proxy:5432/db_openwebui?sslmode=disable
       
       # Pool de Conexões Otimizado
