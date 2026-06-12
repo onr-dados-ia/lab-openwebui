@@ -1,34 +1,15 @@
-version: '3.8'
-
 services:
   # ---------------------------------------------------------------------------
-  # 1. LiteLLM Auth Bridge: Ponte de autenticação usando credenciais do LiteLLM
-  # ---------------------------------------------------------------------------
-  litellm-auth-bridge:
-    image: southamerica-east1-docker.pkg.dev/projeto-ai-ml-develop/onr-ia-registry/litellm-auth-bridge:latest
-    container_name: litellm-auth-bridge
-    restart: always
-    expose:
-      - "5000"
-    environment:
-      - LITELLM_API_BASE=http://10.75.0.3:4000
-    networks:
-      - onr_ia_network
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  # ---------------------------------------------------------------------------
-  # 2. Open WebUI: Interface de Chat Oficial para Colaboradores do ONR
+  # 1. Open WebUI: Interface de Chat Oficial para Colaboradores do ONR
   # ---------------------------------------------------------------------------
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: open-webui
     restart: always
-    expose:
-      - "8080"
+    # Publica direto no host (acesso via IP interno pela VPN: http://10.75.0.3:8080),
+    # mesmo padrão do LiteLLM (:4000). Servido na RAIZ para evitar o bug de subpath.
+    ports:
+      - "8080:8080"
     volumes:
       - openwebui_data:/app/backend/data
     environment:
@@ -41,30 +22,28 @@ services:
       - DATABASE_POOL_RECYCLE=1800
       - DATABASE_POOL_TIMEOUT=30
       
-      # Conexão de rede com o gateway LiteLLM externo na VPC do ONR (Chave sob controle do Usuário)
-      - OPENAI_API_BASE_URL=http://10.75.0.3:4000/v1
+      # Conexão direta com o container do LiteLLM pela rede Docker compartilhada (Chave sob controle do Usuário)
+      - OPENAI_API_BASE_URL=http://litellm-gateway:4000/v1
       - OPENAI_API_KEY=                 # Força a interface a exigir a chave privada individual de cada usuário
-      - OPENAI_API_BASE_URLS=http://10.75.0.3:4000/v1
+      - OPENAI_API_BASE_URLS=http://litellm-gateway:4000/v1
       - OPENAI_API_KEYS=""
       
-      # Autenticação Integrada via Base do LiteLLM (Trusted Header Auth via Bridge)
-      - ENABLE_SIGNUP=false             # Desativa cadastros comuns locais
+      # Autenticação NATIVA do Open WebUI (login próprio com e-mail/senha no Cloud SQL)
+      # Cadastros públicos fechados: somente o admin cria novos usuários no painel.
+      - ENABLE_SIGNUP=false             # Bloqueia auto-cadastro (admin gerencia usuários)
       - ENABLE_OAUTH_SIGNUP=false       # Desativa login externo via Google SSO/OIDC
-      - WEBUI_AUTH=true                 # Ativa autenticação delegada (Trusted Header Auth)
-      - WEBUI_AUTH_TRUSTED_EMAIL_HEADER=X-User-Email
-      - WEBUI_AUTH_TRUSTED_NAME_HEADER=X-User-Name
+      - WEBUI_AUTH=true                 # Mantém autenticação (agora nativa, não delegada)
       - DEFAULT_USER_ROLE=user          # Papel inicial padrão para novos perfis criados
       
-      # Força o Open WebUI a operar sob o subcaminho /chat gerenciado no Load Balancer
-      - WEBUI_URL=http://dados-ia.onr.org.br/chat
+      # URL base do portal (raiz, acesso por IP interno via VPN).
+      # Futuramente trocar para https://dados-ia.onr.org.br quando publicar via DNS/LB.
+      - WEBUI_URL=http://10.75.0.3:8080
       
       # Otimização de Concorrência e Workers (Mitigação de OOM na VM física)
       - WEB_CONCURRENCY=3
-    depends_on:
-      litellm-auth-bridge:
-        condition: service_healthy
     networks:
       - onr_ia_network
+      - litellm_shared
     deploy:
       resources:
         limits:
@@ -76,28 +55,13 @@ services:
       timeout: 10s
       retries: 3
 
-  # ---------------------------------------------------------------------------
-  # 3. Proxy Reverso Nginx: Terminação SSL/HTTP e Proteção de Borda
-  # ---------------------------------------------------------------------------
-  nginx-proxy:
-    image: southamerica-east1-docker.pkg.dev/projeto-ai-ml-develop/onr-ia-registry/nginx-proxy:latest
-    container_name: nginx-proxy
-    restart: always
-    ports:
-      - "80:80" # Mapeia porta HTTP 80 para acesso flexível sem DNS e SSL provisórios
-    depends_on:
-      - open-webui
-    networks:
-      - onr_ia_network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-
 networks:
   onr_ia_network:
     driver: bridge
+  # Rede pré-existente da stack do LiteLLM nesta mesma VM (permite resolver 'litellm-gateway' por nome)
+  litellm_shared:
+    external: true
+    name: litellm-gateway_default
 
 volumes:
   openwebui_data:
